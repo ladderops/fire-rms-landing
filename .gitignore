@@ -1,3 +1,7 @@
 tools/capture/node_modules/
 .DS_Store
 .video-out/
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc
