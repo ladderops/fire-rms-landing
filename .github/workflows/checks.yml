@@ -1,0 +1,46 @@
+name: Content checks
+
+# This is the marketing site: a static tree served straight from `main` by
+# GitHub Pages. Nothing compiles, so nothing fails at build time, and a
+# broken link or a stray em-dash reaches production the moment it merges.
+#
+# Two checks, both for things a human reading a diff is bad at:
+#
+#   * typographic characters that look almost identical to the ones they
+#     should be, and British spellings, in copy that is meant to be
+#     American English with plain punctuation
+#   * internal links and images that point at files which do not exist
+#
+# Deliberately not a full HTML validator or an external link checker.
+# The first is noisy on hand-written markup, the second fails on other
+# people's outages, and a check that cries wolf gets ignored or removed.
+# See ladderops/ladderops#1985.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  content:
+    name: Content checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No dependencies on purpose. The checker is standard library only,
+      # so this job needs no install step and cannot break on a resolver.
+      - name: Style and internal links
+        run: python3 tools/check_content.py
