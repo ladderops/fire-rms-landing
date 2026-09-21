@@ -1,15 +1,16 @@
-name: Content checks
+name: Checks
 
 # This is the marketing site: a static tree served straight from `main` by
 # GitHub Pages. Nothing compiles, so nothing fails at build time, and a
 # broken link or a stray em-dash reaches production the moment it merges.
 #
-# Two checks, both for things a human reading a diff is bad at:
+# Three checks, all for things a human reading a diff is bad at:
 #
 #   * typographic characters that look almost identical to the ones they
 #     should be, and British spellings, in copy that is meant to be
 #     American English with plain punctuation
 #   * internal links and images that point at files which do not exist
+#   * a credential committed into a PUBLIC repository
 #
 # Deliberately not a full HTML validator or an external link checker.
 # The first is noisy on hand-written markup, the second fails on other
@@ -44,3 +45,81 @@ jobs:
       # so this job needs no install step and cannot break on a resolver.
       - name: Style and internal links
         run: python3 tools/check_content.py
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Enough depth to diff a PR against its base.
+          fetch-depth: 0
+
+      # The official gitleaks-action needs a paid licence for
+      # organizations, and this repo now lives under `ladderops`. The
+      # binary is MIT-licensed, so install it directly -- same reasoning
+      # and same version as ladderops/ladderops's secret-scan.yml.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSL --fail \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # Only the commits the change introduces.
+      #
+      # There is NO full-history sweep here, unlike the main repo, and
+      # that is deliberate rather than an omission. This repository is
+      # public and its history contains a staging password
+      # (ladderops/ladderops#1983). A history scan would fail on every
+      # run from the day it was added, and a check that is red no matter
+      # what anyone does is a check that gets switched off -- which is
+      # exactly how the main repo's CodeQL gate sat inert for four
+      # months.
+      #
+      # What is still actionable is whether a credential is being
+      # committed *now*, and that is what this answers. The historical
+      # value is dealt with by rotating it, which is the only thing that
+      # helps once a public repo has published a string.
+      - name: Scan pull request commits
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          echo "Scanning ${BASE}..${HEAD}"
+          gitleaks git --config .gitleaks.toml --redact --no-banner \
+            --log-opts="--no-merges ${BASE}..${HEAD}"
+
+      - name: Scan pushed commits
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          BEFORE="${{ github.event.before }}"
+          # A new branch (or a force-push past the known ref) reports an
+          # all-zero SHA; fall back to the tip commit alone rather than
+          # silently scanning nothing.
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            RANGE="${{ github.sha }}~1..${{ github.sha }}"
+          else
+            RANGE="${BEFORE}..${{ github.sha }}"
+          fi
+          echo "Scanning ${RANGE}"
+          gitleaks git --config .gitleaks.toml --redact --no-banner \
+            --log-opts="--no-merges ${RANGE}"
+
+      # --redact keeps matched values out of the logs. Without it a
+      # failing scan prints the secret into a CI log that is itself
+      # readable on a public repo -- turning the check into a second leak.
+      - name: Note on failure
+        if: failure()
+        run: |
+          echo "::error::gitleaks found a potential secret."
+          echo "Values are redacted above by design. To see the finding locally:"
+          echo "  gitleaks git --config .gitleaks.toml --log-opts=\"-1 <commit>\""

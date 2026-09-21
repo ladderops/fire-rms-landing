@@ -20,7 +20,23 @@ const FRAMES_DIR = path.join(DELIVERY_DIR, "frames");
 
 const BASE_URL = process.env.CAPTURE_BASE_URL || "https://staging.ladderops.tech";
 const USERNAME = process.env.CAPTURE_USERNAME || "chief";
-const PASSWORD = process.env.CAPTURE_PASSWORD || "Capture2026!shots";
+// No default. This repository is public, and a password with a fallback
+// value here is a working credential for an internet-facing environment
+// published to anyone who clones it. Supply it in the environment:
+//
+//   CAPTURE_PASSWORD=... node record.mjs
+//
+// Fails immediately rather than part-way through a login, so the error
+// names the cause instead of surfacing as a stuck selector.
+const PASSWORD = process.env.CAPTURE_PASSWORD;
+if (!PASSWORD) {
+  console.error(
+    "[record] CAPTURE_PASSWORD is not set.\n" +
+      "  This script signs in to a deployed environment, so the password is\n" +
+      "  supplied at run time and never committed. Export it and re-run.",
+  );
+  process.exit(1);
+}
 const TENANT = process.env.CAPTURE_TENANT || "ridgeview";
 
 const VIEWPORT = { width: 1920, height: 1080 };
