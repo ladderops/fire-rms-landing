@@ -1,0 +1,65 @@
+# gitleaks configuration for the LadderOps marketing site.
+#
+# This repository is PUBLIC and it now carries automation that signs in
+# to a deployed environment (tools/capture/), so a committed credential
+# here is world-readable the moment it merges. That already happened
+# once: ladderops/ladderops#1983.
+#
+# Scope note: the CI gate scans only the commits a change introduces.
+# There is no full-history sweep, because the historical finding above
+# is still in this repo's history and a permanently red check gets
+# disabled. See .github/workflows/checks.yml for the reasoning.
+
+[extend]
+useDefault = true
+
+# The default ruleset does NOT catch this, which was established by
+# planting the exact line #1983 was filed about and watching the scan
+# pass. gitleaks ships detectors for recognizable token FORMATS -- AWS
+# keys, GitHub PATs, private key blocks -- and an entropy-based
+# generic-api-key rule that a short human-chosen password does not trip.
+#
+# But a human-chosen password assigned to a named constant is precisely
+# what leaked here, and precisely what a person reviewing a large diff
+# skims past. So it gets a rule of its own.
+[[rules]]
+id = "inline-credential-literal"
+description = "Credential assigned as a literal instead of read from the environment"
+# An identifier naming a credential, assigned a quoted literal of 6+
+# characters.
+#
+# The `[^"'\n]{0,60}` between the `=` and the quote is the whole point:
+# the leak was written `= process.env.CAPTURE_PASSWORD || "..."`, so a
+# pattern demanding the quote immediately after the `=` misses exactly
+# the idiom that caused this. An earlier draft of this rule did, and
+# planting the real line proved it before it shipped.
+#
+# `process.env.X` with no fallback has no quoted literal and does not
+# match, nor does the variable's name inside a message string.
+# No word boundary before the keyword, so camelCase `clientSecret` is
+# caught; `password`/`passwd` must appear in full so `passthrough` is not.
+# Written with a leading character CLASS rather than a negative
+# lookahead, because gitleaks is Go and RE2 has no lookahead -- the
+# lookahead version compiled fine in Python and made gitleaks panic.
+# It drops selector- and path-shaped values: the capture
+# scripts are full of `page.locator("#password")`, which is a DOM id and
+# not a credential. Three of those were the only findings on the clean
+# tree before this was added.
+regex = '''(?i)(?:pass(?:word|wd)|secret|token|api[_-]?key|credential)[a-z0-9_]*\s*(?:=|:)[^"'\n]{0,60}["'][^"'\s#./$@][^"'\s]{5,}["']'''
+keywords = ["password", "passwd", "secret", "token", "apikey", "api_key", "credential"]
+tags = ["credential", "ladderops#1983"]
+
+[allowlist]
+description = "Paths that produce findings which are not live credentials"
+
+paths = [
+  # Vendored Swagger UI, committed as built bundles. Minified third-party
+  # JavaScript matches the generic high-entropy rules on ordinary
+  # identifiers and base64 tables, which is noise rather than signal.
+  '''^docs/assets/''',
+  '''\.min\.js$''',
+  '''\.min\.css$''',
+  # This file. It necessarily contains the words it searches for, and the
+  # rule above would otherwise match its own regex literal.
+  '''^\.gitleaks\.toml$''',
+]
